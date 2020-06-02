@@ -9,18 +9,16 @@
 #include <fcntl.h>
 #include <stdarg.h>
 #include <malloc.h>
+/*#include <openat2.h>*/
 
 // List of path pairs. Paths beginning with the first item will be
 // translated by replacing the matching part with the second item.
 static const char *path_map[][2] = {
-    { "/etc/ownCloud/", "/home/user1/.etc/ownCloud/" },
+    { "/etc/resolv.conf", "/home/poro/resolv.conf" },
 };
 
-__thread char *buffer = NULL;
-__thread int buffer_size = -1;
-
-typedef FILE* (*orig_fopen_func_type)(const char *path, const char *mode);
-typedef int (*orig_open_func_type)(const char *pathname, int flags, ...);
+static __thread char *buffer = NULL;
+static __thread int buffer_size = -1;
 
 static int starts_with(const char *str, const char *prefix) {
     return (strncmp(prefix, str, strlen(prefix)) == 0);
@@ -45,8 +43,7 @@ static char *get_buffer(int min_size) {
     return buffer;
 }
 
-static const char *fix_path(const char *path)
-{
+static const char *fix_path(const char *path) {
     int count = (sizeof path_map) / (sizeof *path_map); // Array length
     for (int i = 0; i < count; i++) {
         const char *prefix = path_map[i][0];
@@ -56,7 +53,7 @@ static const char *fix_path(const char *path)
             char *new_path = get_buffer(strlen(path) + strlen(replace) - strlen(prefix));
             strcpy(new_path, replace);
             strcat(new_path, rest);
-            printf("Mapped Path: %s  ==>  %s\n", path, new_path);
+            fprintf(stderr, "Mapped Path: %s  ==>  %s\n", path, new_path);
             return new_path;
         }
     }
@@ -64,41 +61,88 @@ static const char *fix_path(const char *path)
 }
 
 
-int open(const char *pathname, int flags, ...)
-{
+// varargs => special case!
+typedef int (*orig_open_func)(const char *pathname, int flags, ...);
+int open(const char *pathname, int flags, ...) {
     const char *new_path = fix_path(pathname);
 
-    orig_open_func_type orig_func;
-    orig_func = (orig_open_func_type)dlsym(RTLD_NEXT, "open");
+    static orig_open_func orig_func = NULL;
+    if (orig_func == NULL)
+        orig_func = (orig_open_func)dlsym(RTLD_NEXT, "open");
 
     // If O_CREAT is used to create a file, the file access mode must be given.
     if (flags & O_CREAT) {
         va_list args;
         va_start(args, flags);
-        int mode = va_arg(args, int);
+        mode_t mode = va_arg(args, mode_t);
         va_end(args);
         return orig_func(new_path, flags, mode);
     } else {
         return orig_func(new_path, flags);
     }
 }
-
-int open64(const char *pathname, int flags, ...)
-{
+int open64(const char *pathname, int flags, ...) {
     const char *new_path = fix_path(pathname);
 
-    orig_open_func_type orig_func;
-    orig_func = (orig_open_func_type)dlsym(RTLD_NEXT, "open64");
+    static orig_open_func orig_func = NULL;
+    if (orig_func == NULL)
+        orig_func = (orig_open_func)dlsym(RTLD_NEXT, "open64");
 
     // If O_CREAT is used to create a file, the file access mode must be given.
     if (flags & O_CREAT) {
         va_list args;
         va_start(args, flags);
-        int mode = va_arg(args, int);
+        mode_t mode = va_arg(args, mode_t);
         va_end(args);
         return orig_func(new_path, flags, mode);
     } else {
         return orig_func(new_path, flags);
     }
 }
+typedef int (*orig_openat_func)(int dirfd, const char *pathname, int flags, ...);
+int openat(int dirfd, const char *pathname, int flags, ...) {
+    const char *new_path = fix_path(pathname);
+
+    static orig_openat_func orig_func = NULL;
+    if (orig_func == NULL)
+        orig_func = (orig_openat_func)dlsym(RTLD_NEXT, "openat");
+
+    // If O_CREAT is used to create a file, the file access mode must be given.
+    if (flags & O_CREAT) {
+        va_list args;
+        va_start(args, flags);
+        mode_t mode = va_arg(args, mode_t);
+        va_end(args);
+        return orig_func(dirfd, new_path, flags, mode);
+    } else {
+        return orig_func(dirfd, new_path, flags);
+    }
+}
+
+// general hook stuff
+
+// can't write C without committing some crimes against code standards
+#define DEFINE_HOOK(rett, name, arglist, ...) \
+    rett name(__VA_ARGS__) { \
+        if (pathname != NULL) pathname = fix_path(pathname); \
+        static void *orig_func = NULL; \
+        if (orig_func == NULL) orig_func = dlsym(RTLD_NEXT, #name); \
+        return ((rett (*)(__VA_ARGS__))(orig_func)) arglist; \
+    } \
+
+/*DEFINE_HOOK(int, openat2, (dirfd, pathname, how, size),
+        int dirfd, const char* pathname, const struct open_how* how, size_t size)*/
+
+DEFINE_HOOK(int, creat, (pathname, mode), const char* pathname, mode_t mode)
+
+DEFINE_HOOK(int, stat, (pathname, statbuf), const char* pathname, struct stat* statbuf)
+
+DEFINE_HOOK(int, lstat, (pathname, statbuf), const char* pathname, struct stat* statbuf)
+
+// ...
+
+DEFINE_HOOK(FILE*, fopen, (pathname, mode), const char* pathname, const char* mode)
+
+DEFINE_HOOK(FILE*, freopen, (pathname, mode, stream),
+        const char* pathname, const char* mode, FILE* stream)
 
