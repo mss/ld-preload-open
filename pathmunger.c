@@ -12,10 +12,14 @@
 #include <malloc.h>
 /*#include <openat2.h>*/
 
-// List of path pairs. Paths beginning with the first item will be
-// translated by replacing the matching part with the second item.
+// List of path replacement pairs.  The first item is the prefix, the
+// second the replacement string.  When the prefix ends with a slash,
+// it is compared against the beginning of the path; else the whole
+// path is compared.  If these are equal, the prefix is replaced with
+// the replacement.
 static const char *path_map[][2] = {
     { "/etc/os-release", "/tmp/os-release" },
+    { "/etc/os-release.d/", "/tmp/os-release.d/" },
 };
 
 static int debug = 0;
@@ -29,8 +33,23 @@ void __attribute__((constructor)) init() {
 }
 
 
-static int starts_with(const char *str, const char *prefix) {
-    return (strncmp(prefix, str, strlen(prefix)) == 0);
+static size_t match(const char *path, const char *prefix) {
+    const size_t prefix_len = strlen(prefix);
+    if (prefix[prefix_len - 1] != '/') {
+        return strcmp(path, prefix) == 0 ? prefix_len : 0;
+    }
+    else {
+        const size_t path_len = strlen(path);
+        if (path_len == prefix_len - 1) {
+            return strncmp(path, prefix, path_len) == 0 ? path_len : 0;
+        }
+        else if (path_len < prefix_len) {
+            return 0;
+        }
+        else {
+            return strncmp(path, prefix, prefix_len) == 0 ? prefix_len : 0;
+        }
+    }
 }
 
 static char *get_buffer(size_t min_size) {
@@ -60,14 +79,14 @@ static const char *fix_path(const char *path) {
     for (int i = 0; i < count; i++) {
         const char *prefix = path_map[i][0];
         const char *replace = path_map[i][1];
-        if (starts_with(path, prefix)) {
-            const char *rest = path + strlen(prefix);
+        const size_t match_len = match(path, prefix);
+        if (match_len) {
             char *new_path = get_buffer(strlen(path) + strlen(replace) - strlen(prefix));
             if (new_path == NULL) {
                 return path;
             }
-            strcpy(new_path, replace);
-            strcat(new_path, rest);
+            strncpy(new_path, replace, match_len);
+            strcat(new_path, path + match_len);
             if (debug) {
                 fprintf(stderr, "Mapped Path: %s  ==>  %s\n", path, new_path);
             }
