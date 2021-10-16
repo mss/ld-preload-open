@@ -14,7 +14,7 @@
 // List of path pairs. Paths beginning with the first item will be
 // translated by replacing the matching part with the second item.
 static const char *path_map[][2] = {
-    { "/etc/resolv.conf", "/home/poro/resolv.conf" },
+    { "/etc/os-release", "/tmp/os-release" },
 };
 
 static __thread char *buffer = NULL;
