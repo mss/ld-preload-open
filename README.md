@@ -9,3 +9,8 @@ Simply adjust the paths you want to map in the `.c` file and compile with `make`
 Then start your program with the following command:
 
     LD_PRELOAD=$PWD/libpathmunger.so someprogram
+
+Or using the sample wrapper script:
+
+    echo redirected > /tmp/os-release
+    ./pathmunger.sh cat /etc/os-release
