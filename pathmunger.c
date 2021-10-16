@@ -21,7 +21,7 @@ static const char *path_map[][2] = {
 static int debug = 0;
 
 static __thread char *buffer = NULL;
-static __thread int buffer_size = -1;
+static __thread size_t buffer_size = 0;
 
 
 void __attribute__((constructor)) init() {
@@ -33,20 +33,21 @@ static int starts_with(const char *str, const char *prefix) {
     return (strncmp(prefix, str, strlen(prefix)) == 0);
 }
 
-static char *get_buffer(int min_size) {
-    int step = 63;
-    if (min_size < 1) {
+static char *get_buffer(size_t min_size) {
+    const size_t slack = 63;
+    if (min_size == 0) {
         min_size = 1;
     }
     if (min_size > buffer_size) {
+        size_t new_size = min_size + slack;
         if (buffer != NULL) {
             free(buffer);
             buffer = NULL;
-            buffer_size = -1;
+            buffer_size = 0;
         }
-        buffer = malloc(min_size + step);
+        buffer = malloc(new_size);
         if (buffer != NULL) {
-            buffer_size = min_size + step;
+            buffer_size = new_size;
         }
     }
     return buffer;
@@ -62,6 +63,9 @@ static const char *fix_path(const char *path) {
         if (starts_with(path, prefix)) {
             const char *rest = path + strlen(prefix);
             char *new_path = get_buffer(strlen(path) + strlen(replace) - strlen(prefix));
+            if (new_path == NULL) {
+                return path;
+            }
             strcpy(new_path, replace);
             strcat(new_path, rest);
             if (debug) {
