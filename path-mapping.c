@@ -44,6 +44,8 @@ static char *get_buffer(int min_size) {
 }
 
 static const char *fix_path(const char *path) {
+    if (path == NULL)
+        return NULL;
     int count = (sizeof path_map) / (sizeof *path_map); // Array length
     for (int i = 0; i < count; i++) {
         const char *prefix = path_map[i][0];
@@ -124,7 +126,7 @@ int openat(int dirfd, const char *pathname, int flags, ...) {
 // can't write C without committing some crimes against code standards
 #define DEFINE_HOOK(rett, name, arglist, ...) \
     rett name(__VA_ARGS__) { \
-        if (pathname != NULL) pathname = fix_path(pathname); \
+        pathname = fix_path(pathname); \
         static void *orig_func = NULL; \
         if (orig_func == NULL) orig_func = dlsym(RTLD_NEXT, #name); \
         return ((rett (*)(__VA_ARGS__))(orig_func)) arglist; \
