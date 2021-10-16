@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 
+#include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <errno.h>
@@ -17,8 +18,16 @@ static const char *path_map[][2] = {
     { "/etc/os-release", "/tmp/os-release" },
 };
 
+static int debug = 0;
+
 static __thread char *buffer = NULL;
 static __thread int buffer_size = -1;
+
+
+void __attribute__((constructor)) init() {
+    debug = getenv("LIBPATHMUNGER_DEBUG") != NULL;
+}
+
 
 static int starts_with(const char *str, const char *prefix) {
     return (strncmp(prefix, str, strlen(prefix)) == 0);
@@ -55,7 +64,9 @@ static const char *fix_path(const char *path) {
             char *new_path = get_buffer(strlen(path) + strlen(replace) - strlen(prefix));
             strcpy(new_path, replace);
             strcat(new_path, rest);
-            fprintf(stderr, "Mapped Path: %s  ==>  %s\n", path, new_path);
+            if (debug) {
+                fprintf(stderr, "Mapped Path: %s  ==>  %s\n", path, new_path);
+            }
             return new_path;
         }
     }
