@@ -22,34 +22,111 @@ static const char *path_map[][2] = {
     { "/etc/os-release.d/", "/tmp/os-release.d/" },
 };
 
+
+struct munger {
+    int is_prefix;
+    char *source_str;
+    size_t source_len;
+    char *target_str;
+    size_t target_len;
+    const struct munger *next;
+};
+static const struct munger *munge_list = NULL;
+
 static int debug = 0;
 
 static __thread char *buffer = NULL;
 static __thread size_t buffer_size = 0;
 
 
-void __attribute__((constructor)) init() {
-    debug = getenv("LIBPATHMUNGER_DEBUG") != NULL;
+static struct munger *create_munger(const char *source_mem, size_t source_len, const char *target_mem, size_t target_len) {
+    struct munger *munger = malloc(sizeof(struct munger));
+    if (munger == NULL) {
+        goto err;
+    }
+    memset(munger, 0, sizeof(struct munger));
+
+    if (source_len == 0 || target_len == 0) {
+        goto err;
+    }
+
+    if (source_mem[source_len - 1] == '/') {
+        munger->is_prefix = 1;
+        source_len--;
+    }
+    if (target_mem[target_len - 1] == '/') {
+        if (!munger->is_prefix) {
+            goto err;
+        }
+        target_len--;
+    }
+
+    munger->source_len = source_len;
+    munger->source_str = malloc(source_len + 1);
+    if (munger->source_str == NULL) {
+        goto err;
+    }
+    memset(munger->source_str, 0, source_len + 1);
+    memcpy(munger->source_str, source_mem, source_len);
+
+    munger->target_len = target_len;
+    munger->target_str = malloc(target_len + 1);
+    if (munger->target_str == NULL) {
+        goto err;
+    }
+    memset(munger->target_str, 0, target_len + 1);
+    memcpy(munger->target_str, target_mem, target_len);
+
+    return munger;
+
+err:
+    free(munger);
+    return NULL;
+}
+
+static struct munger *create_munger_from_strings(const char *source, const char *target) {
+    return create_munger(source, strlen(source), target, strlen(target));
 }
 
 
-static size_t match(const char *path, const char *prefix) {
-    const size_t prefix_len = strlen(prefix);
-    if (prefix[prefix_len - 1] != '/') {
-        return strcmp(path, prefix) == 0 ? prefix_len : 0;
+void __attribute__((constructor)) init() {
+    debug = getenv("LIBPATHMUNGER_DEBUG") != NULL;
+
+    struct munger **curr = (struct munger **)&munge_list;
+    for (int i = 0; i < (sizeof path_map) / (sizeof *path_map); i++) {
+        struct munger *next = create_munger_from_strings(path_map[i][0], path_map[i][1]);
+        if (next == NULL) {
+            continue;
+        }
+
+        if (debug) {
+            fprintf(stderr, "Loadded Mapping: (prefix: %c) %s -> %s\n", "NY"[next->is_prefix], next->source_str, next->target_str);
+        }
+        if (*curr == NULL) {
+            *curr = next;
+            continue;
+        }
+        (*curr)->next = next;
+        curr = &next;
     }
-    else {
-        const size_t path_len = strlen(path);
-        if (path_len == prefix_len - 1) {
-            return strncmp(path, prefix, path_len) == 0 ? path_len : 0;
-        }
-        else if (path_len < prefix_len) {
-            return 0;
-        }
-        else {
-            return strncmp(path, prefix, prefix_len) == 0 ? prefix_len : 0;
-        }
+}
+
+
+static int match(const char *path, const struct munger *munger) {
+    if (strncmp(path, munger->source_str, munger->source_len) != 0) {
+        return 0;
     }
+
+    const char next = path[munger->source_len];
+    if (next == '\0') {
+        return 1;
+    }
+
+    if (!munger->is_prefix) {
+        return 0;
+    }
+
+    return next == '/';
 }
 
 static char *get_buffer(size_t min_size) {
@@ -73,20 +150,18 @@ static char *get_buffer(size_t min_size) {
 }
 
 static const char *fix_path(const char *path) {
-    if (path == NULL)
+    if (path == NULL) {
         return NULL;
-    int count = (sizeof path_map) / (sizeof *path_map); // Array length
-    for (int i = 0; i < count; i++) {
-        const char *prefix = path_map[i][0];
-        const char *replace = path_map[i][1];
-        const size_t match_len = match(path, prefix);
-        if (match_len) {
-            char *new_path = get_buffer(strlen(path) + strlen(replace) - strlen(prefix));
+    }
+    for (const struct munger *m = munge_list; m != NULL; m = m->next) {
+        int found = match(path, m);
+        if (found) {
+            char *new_path = get_buffer(strlen(path) - m->source_len + m->target_len);
             if (new_path == NULL) {
                 return path;
             }
-            strncpy(new_path, replace, match_len);
-            strcat(new_path, path + match_len);
+            strcpy(new_path, m->target_str);
+            strcat(new_path, path + m->source_len);
             if (debug) {
                 fprintf(stderr, "Mapped Path: %s  ==>  %s\n", path, new_path);
             }
